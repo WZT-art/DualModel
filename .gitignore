@@ -1,0 +1,4 @@
+.vscode/
+build/
+Boost_dll/
+exec/
