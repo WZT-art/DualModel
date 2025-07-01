@@ -48,12 +48,55 @@ struct Group
 	std::vector<bool> cupsEnabled;
 };
 
+struct TensorRT {
+
+    std::string modelPath;
+
+	std::unique_ptr<nvinfer1::ICudaEngine, std::function<void(nvinfer1::ICudaEngine*)>> engine;
+	std::unique_ptr<nvinfer1::IExecutionContext, std::function<void(nvinfer1::IExecutionContext*)>> context;
+	cudaStream_t stream;
+
+	float* gpuBuffers[2];
+	int numAttributes, numDetections, numClasses;
+	int* hostNumAnchors;
+	int* deviceNumAnchors;
+	Detection* deviceFilteredDetections;
+	std::vector<Detection> results;
+
+    uint8_t* pinnedMem;
+    uint8_t* deviceMem;
+    uint16_t* depthMatHost;
+
+    TensorRT() = default;
+    ~TensorRT() {
+        if (deviceFilteredDetections) {
+            CUDA_CHECK(cudaFree(deviceFilteredDetections));
+            deviceFilteredDetections = nullptr;
+        }
+        if (deviceNumAnchors) {
+            CUDA_CHECK(cudaFree(deviceNumAnchors));
+            deviceNumAnchors = nullptr;
+        }
+        if (hostNumAnchors) {
+            CUDA_CHECK(cudaFreeHost(hostNumAnchors));
+            hostNumAnchors = nullptr;
+        }
+        for (auto& buffer : gpuBuffers) {
+            if (buffer) {
+                CUDA_CHECK(cudaFree(buffer));
+                buffer = nullptr;
+            }
+        }
+        if (stream) {
+            CUDA_CHECK(cudaStreamDestroy(stream));
+            stream = nullptr;
+        }
+    }
+};
+
 class YOLO11 {
 public:
-    YOLO11(std::string modelPath, 
-           uint8_t** pinnedMemPtr, 
-		   uint8_t** deviceMemPtr, 
-           uint16_t** depthMatHostPtr);
+    YOLO11(TensorRT& trt);
 
     ~YOLO11();
 

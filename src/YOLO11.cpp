@@ -19,82 +19,73 @@ class TLogger : public nvinfer1::ILogger {
 
 // typedef unsigned short ushort;
 
-YOLO11::YOLO11(std::string modelPath, 
-			   uint8_t** pinnedMemPtr, 
-			   uint8_t** deviceMemPtr, 
-			   uint16_t** depthMatHostPtr)
-    : pinnedMemPtr_(pinnedMemPtr),
-      deviceMemPtr_(deviceMemPtr),
-	  depthMatHostPtr_(depthMatHostPtr) {
+YOLO11::YOLO11(TensorRT& trt){
     
-    std::ifstream engineStream(modelPath, std::ios::binary); 
+    std::ifstream engineStream(trt.modelPath, std::ios::binary); 
     engineStream.seekg(0, std::ios::end);			
-    std::cout<<"Open the engine file successfully"<<std::endl;
 	LOG_TRACE("Open the engine file successfully");
 
     const size_t modelSize = engineStream.tellg();
-    std::cout<<"engine size: "<<modelSize<<std::endl;
 	LOG_INFO("engine size: ", modelSize);
     
     engineStream.seekg(0, std::ios::beg);			
     std::unique_ptr<char[]> engineData(new char[modelSize]);	
     engineStream.read(engineData.get(), modelSize);		
     engineStream.close();
-    std::cout<<"Read the engine file successfully"<<std::endl;
 	LOG_TRACE("Read the engine file successfully");
 
     runtime_ = std::unique_ptr<nvinfer1::IRuntime, std::function<void(nvinfer1::IRuntime*)>>(
         nvinfer1::createInferRuntime(TRTlog),
         [](nvinfer1::IRuntime* r) { 
             // if(r) r->destroy(); 
-            std::cout<<"Runtime destroyed"<<std::endl;
 			LOG_TRACE("Runtime destroyed");
         }
     );
-    engine_ = std::unique_ptr<nvinfer1::ICudaEngine, std::function<void(nvinfer1::ICudaEngine*)>>(
+    trt.engine = std::unique_ptr<nvinfer1::ICudaEngine, std::function<void(nvinfer1::ICudaEngine*)>>(
         runtime_->deserializeCudaEngine(engineData.get(), modelSize),
         [](nvinfer1::ICudaEngine* e) { 
             // if(e) e->destroy(); 
-            std::cout<<"Engine destroyed"<<std::endl;
 			LOG_TRACE("Engine destroyed");
         }
     );
-    context_ = std::unique_ptr<nvinfer1::IExecutionContext, std::function<void(nvinfer1::IExecutionContext*)>>(
-        engine_->createExecutionContext(),
+    trt.context = std::unique_ptr<nvinfer1::IExecutionContext, std::function<void(nvinfer1::IExecutionContext*)>>(
+        trt.engine->createExecutionContext(),
         [](nvinfer1::IExecutionContext* c) {
             // if(c) c->destroy();
-            std::cout<<"Context destroyed"<<std::endl;
 			LOG_TRACE("Context destroyed");
         }
     );
-    std::cout<<"Create tensorRT runtime, engine, context successfully"<<std::endl;
 	LOG_TRACE("Create tensorRT runtime, engine, context successfully");
 
-	auto inputName = engine_->getIOTensorName(0);  
-	auto outputName = engine_->getIOTensorName(1); 
+	auto inputName  = trt.engine->getIOTensorName(0);  
+	auto outputName = trt.engine->getIOTensorName(1); 
 
-	auto inputShape = engine_->getTensorShape(inputName);
-	inputHeight_ = inputShape.d[2];
-	inputWidth_  = inputShape.d[3];
+	auto inputShape = trt.engine->getTensorShape(inputName);
+	inputHeight_ 	= inputShape.d[2];
+	inputWidth_  	= inputShape.d[3];
 
-	auto outputShape = engine_->getTensorShape(outputName);
-	numAttributes_ = outputShape.d[1];  // 6 (for OBB)
-	numDetections_ = outputShape.d[2];  // 8400
-    numClasses_    = numAttributes_ - 5;  // (x, y, w, h, angle)
+	auto outputShape  = trt.engine->getTensorShape(outputName);
+	trt.numAttributes = outputShape.d[1];  // 6 (for OBB)
+	trt.numDetections = outputShape.d[2];  // 8400
+    trt.numClasses    = numAttributes_ - 5;  // (x, y, w, h, angle)
 
-    CUDA_CHECK(cudaMalloc(&gpuBuffers_[0], 3*640*640*sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&gpuBuffers_[1], 6*8400*sizeof(float)));
-	CUDA_CHECK(cudaMalloc(&deviceNumAnchors_, sizeof(int)));
-	CUDA_CHECK(cudaMemset(deviceNumAnchors_, 0, sizeof(int)));
-	CUDA_CHECK(cudaMallocHost((void**)&hostNumAnchors_, sizeof(int)));
-	memset(hostNumAnchors_, 0, sizeof(int));
-	CUDA_CHECK(cudaMalloc(&deviceFilteredDetections_, 840 * sizeof(Detection)));
-    cuda_preprocess_init(MAX_IMAGE_SIZE, pinnedMemPtr_, deviceMemPtr_, depthMatHostPtr_);
-    CUDA_CHECK(cudaStreamCreate(&stream_));
-	context_ -> setOptimizationProfileAsync(0, stream_);
-
-	context_->setInputTensorAddress(inputName, gpuBuffers_[0]);  
-	context_->setOutputTensorAddress(outputName, gpuBuffers_[1]);
+    CUDA_CHECK(cudaMalloc(&(trt.gpuBuffers[0]), 3*640*640*sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&(trt.gpuBuffers[1]), 6*8400*sizeof(float)));
+	CUDA_CHECK(cudaMalloc(&(trt.deviceNumAnchors), sizeof(int)));
+	CUDA_CHECK(cudaMemset(trt.deviceNumAnchors, 0, sizeof(int)));
+	CUDA_CHECK(cudaMallocHost((void**)&(trt.hostNumAnchors), sizeof(int)));
+	memset(trt.hostNumAnchors, 0, sizeof(int));
+	CUDA_CHECK(cudaMalloc(&(trt.deviceFilteredDetections), 840 * sizeof(Detection)));
+    cuda_preprocess_init(
+		MAX_IMAGE_SIZE,
+		&(trt.pinnedMem),
+		&(trt.deviceMem),
+		&(trt.depthMatHost)
+	);
+    CUDA_CHECK(cudaStreamCreate(&(trt.stream)));
+	trt.context -> setOptimizationProfileAsync(0, trt.stream);
+	trt.context -> setInputTensorAddress(inputName, trt.gpuBuffers[0]);  
+	trt.context -> setOutputTensorAddress(outputName, trt.gpuBuffers[1]);
 
 	std::ifstream file("Parameter.txt");
     if (!file.is_open()) {
@@ -191,27 +182,6 @@ YOLO11::YOLO11(std::string modelPath,
         }
     }
 
-	// std::cout<<"R: "<<std::endl;
-	// for (int i = 0; i < 3; i++) {
-	// 	for (int j = 0; j < 3; j++) {
-	// 		std::cout<<params_.R[i*3+j]<<" ";
-	// 	}
-	// 	std::cout<<std::endl;
-	// }
-	// std::cout<<"Rinv: "<<std::endl;
-	// for (int i = 0; i < 3; i++) {
-	// 	for (int j = 0; j < 3; j++) {
-	// 		std::cout<<params_.Rinv[i*3+j]<<" ";
-	// 	}
-	// 	std::cout<<std::endl;
-	// }
-
-	// Allocate device memory for CameraParams
-	// CUDA_CHECK(cudaMalloc(&deviceParams_, sizeof(CameraParams)));
-	// Copy CameraParams to device
-
-	// CUDA_CHECK(cudaMalloc(&deviceParams_, sizeof(CameraParams)));
-	// CUDA_CHECK(cudaMemcpy(deviceParams_, &params_, sizeof(CameraParams), cudaMemcpyHostToDevice));
 	initCameraParams(params_);
 }
 
