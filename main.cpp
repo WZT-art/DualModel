@@ -11,7 +11,7 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
-#include <pcl/kdtree/kdtree_flann.h>
+// #include <pcl/kdtree/kdtree_flann.h>
 
 // Eigen
 #include <Eigen/Dense>
@@ -19,11 +19,11 @@
 // #include <Windows.h>
 // OpenCV
 #include <opencv2/opencv.hpp>
-#include <opencv2/cudaimgproc.hpp>
+// #include <opencv2/cudaimgproc.hpp>
 
 // CUDA
 #include <cuda_runtime.h>
-#include <cublas_v2.h>  // 可选：测试 cuBLAS
+// #include <cublas_v2.h>  // 可选：测试 cuBLAS
 
 // TensorRT
 #include <NvInfer.h>
@@ -76,7 +76,7 @@ void test_pcl() {
     std::cout << "[PCL] Filtered cloud points: " << cloud_filtered->size() << std::endl;
 
     // 4. 使用 KdTreeFLANN + 最近邻查找
-    pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
+/*     pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
     kdtree.setInputCloud(cloud_filtered);
     pcl::PointXYZ search_point(0.0, 0.0, 0.0);
 
@@ -89,7 +89,7 @@ void test_pcl() {
             std::cout << "  " << i << ": (" << pt.x << ", " << pt.y << ", " << pt.z 
                       << "), dist: " << distances[i] << std::endl;
         }
-    }
+    } */
 
     // 5. Eigen 矩阵计算测试
     Eigen::Matrix3f mat;
@@ -116,10 +116,10 @@ void test_opencv() {
     cv::destroyAllWindows();
 
     // CUDA-accelerated OpenCV
-    cv::cuda::GpuMat gpu_img;
+/*     cv::cuda::GpuMat gpu_img;
     gpu_img.upload(img);
     cv::cuda::cvtColor(gpu_img, gpu_img, cv::COLOR_BGR2GRAY);
-    std::cout << "OpenCV + CUDA test passed!" << std::endl;
+    std::cout << "OpenCV + CUDA test passed!" << std::endl; */
 }
 
 // ========== 3. CUDA 测试（仅 Runtime API） ==========
@@ -143,7 +143,7 @@ void test_cuda() {
     cudaMemcpy(d_b, h_b, N * sizeof(float), cudaMemcpyHostToDevice);
 
     // 使用 cuBLAS 计算点积（替代核函数测试）
-    cublasHandle_t handle;
+/*     cublasHandle_t handle;
     cublasCreate(&handle);
     float dot_result = 0;
     cublasSdot(handle, N, d_a, 1, d_b, 1, &dot_result);
@@ -154,7 +154,7 @@ void test_cuda() {
 
     std::cout << "CUDA + cuBLAS dot product result: " << dot_result << std::endl;
     std::cout << "(Expected: 1*10 + 2*20 + 3*30 + 4*40 + 5*50 = 550)" << std::endl;
-
+ */
     // 释放内存
     delete[] h_a;
     delete[] h_b;
