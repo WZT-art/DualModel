@@ -19,75 +19,8 @@ class TLogger : public nvinfer1::ILogger {
 
 // typedef unsigned short ushort;
 
-YOLO11::YOLO11(TensorRT& trt){
-    
-    std::ifstream engineStream(trt.modelPath, std::ios::binary); 
-    engineStream.seekg(0, std::ios::end);			
-	LOG_TRACE("Open the engine file successfully");
-
-    const size_t modelSize = engineStream.tellg();
-	LOG_INFO("engine size: ", modelSize);
-    
-    engineStream.seekg(0, std::ios::beg);			
-    std::unique_ptr<char[]> engineData(new char[modelSize]);	
-    engineStream.read(engineData.get(), modelSize);		
-    engineStream.close();
-	LOG_TRACE("Read the engine file successfully");
-
-    runtime_ = std::unique_ptr<nvinfer1::IRuntime, std::function<void(nvinfer1::IRuntime*)>>(
-        nvinfer1::createInferRuntime(TRTlog),
-        [](nvinfer1::IRuntime* r) { 
-            // if(r) r->destroy(); 
-			LOG_TRACE("Runtime destroyed");
-        }
-    );
-    trt.engine = std::unique_ptr<nvinfer1::ICudaEngine, std::function<void(nvinfer1::ICudaEngine*)>>(
-        runtime_->deserializeCudaEngine(engineData.get(), modelSize),
-        [](nvinfer1::ICudaEngine* e) { 
-            // if(e) e->destroy(); 
-			LOG_TRACE("Engine destroyed");
-        }
-    );
-    trt.context = std::unique_ptr<nvinfer1::IExecutionContext, std::function<void(nvinfer1::IExecutionContext*)>>(
-        trt.engine->createExecutionContext(),
-        [](nvinfer1::IExecutionContext* c) {
-            // if(c) c->destroy();
-			LOG_TRACE("Context destroyed");
-        }
-    );
-	LOG_TRACE("Create tensorRT runtime, engine, context successfully");
-
-	auto inputName  = trt.engine->getIOTensorName(0);  
-	auto outputName = trt.engine->getIOTensorName(1); 
-
-	auto inputShape = trt.engine->getTensorShape(inputName);
-	inputHeight_ 	= inputShape.d[2];
-	inputWidth_  	= inputShape.d[3];
-
-	auto outputShape  = trt.engine->getTensorShape(outputName);
-	trt.numAttributes = outputShape.d[1];  // 6 (for OBB)
-	trt.numDetections = outputShape.d[2];  // 8400
-    trt.numClasses    = numAttributes_ - 5;  // (x, y, w, h, angle)
-
-    CUDA_CHECK(cudaMalloc(&(trt.gpuBuffers[0]), 3*640*640*sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&(trt.gpuBuffers[1]), 6*8400*sizeof(float)));
-	CUDA_CHECK(cudaMalloc(&(trt.deviceNumAnchors), sizeof(int)));
-	CUDA_CHECK(cudaMemset(trt.deviceNumAnchors, 0, sizeof(int)));
-	CUDA_CHECK(cudaMallocHost((void**)&(trt.hostNumAnchors), sizeof(int)));
-	memset(trt.hostNumAnchors, 0, sizeof(int));
-	CUDA_CHECK(cudaMalloc(&(trt.deviceFilteredDetections), 840 * sizeof(Detection)));
-    cuda_preprocess_init(
-		MAX_IMAGE_SIZE,
-		&(trt.pinnedMem),
-		&(trt.deviceMem),
-		&(trt.depthMatHost)
-	);
-    CUDA_CHECK(cudaStreamCreate(&(trt.stream)));
-	trt.context -> setOptimizationProfileAsync(0, trt.stream);
-	trt.context -> setInputTensorAddress(inputName, trt.gpuBuffers[0]);  
-	trt.context -> setOutputTensorAddress(outputName, trt.gpuBuffers[1]);
-
-	std::ifstream file("Parameter.txt");
+YOLO11::YOLO11(const std::string& cameraParamsFile){
+	std::ifstream file(cameraParamsFile);
     if (!file.is_open()) {
         std::cerr << "Error: Could not open Parameter.txt" << std::endl;
         throw std::runtime_error("Error: Could not open Parameter.txt");
@@ -185,7 +118,75 @@ YOLO11::YOLO11(TensorRT& trt){
 	initCameraParams(params_);
 }
 
-YOLO11::~YOLO11() {
+bool YOLO11::initTensorRT(TensorRT& trt) {
+	    std::ifstream engineStream(trt.modelPath, std::ios::binary); 
+    engineStream.seekg(0, std::ios::end);			
+	LOG_TRACE("Open the engine file successfully");
+
+    const size_t modelSize = engineStream.tellg();
+	LOG_INFO("engine size: ", modelSize);
+    
+    engineStream.seekg(0, std::ios::beg);			
+    std::unique_ptr<char[]> engineData(new char[modelSize]);	
+    engineStream.read(engineData.get(), modelSize);		
+    engineStream.close();
+	LOG_TRACE("Read the engine file successfully");
+
+    runtime_ = std::unique_ptr<nvinfer1::IRuntime, std::function<void(nvinfer1::IRuntime*)>>(
+        nvinfer1::createInferRuntime(TRTlog),
+        [](nvinfer1::IRuntime* r) { 
+            // if(r) r->destroy(); 
+			LOG_TRACE("Runtime destroyed");
+        }
+    );
+    trt.engine = std::unique_ptr<nvinfer1::ICudaEngine, std::function<void(nvinfer1::ICudaEngine*)>>(
+        runtime_->deserializeCudaEngine(engineData.get(), modelSize),
+        [](nvinfer1::ICudaEngine* e) { 
+            // if(e) e->destroy(); 
+			LOG_TRACE("Engine destroyed");
+        }
+    );
+    trt.context = std::unique_ptr<nvinfer1::IExecutionContext, std::function<void(nvinfer1::IExecutionContext*)>>(
+        trt.engine->createExecutionContext(),
+        [](nvinfer1::IExecutionContext* c) {
+            // if(c) c->destroy();
+			LOG_TRACE("Context destroyed");
+        }
+    );
+	LOG_TRACE("Create tensorRT runtime, engine, context successfully");
+
+	auto inputName  = trt.engine->getIOTensorName(0);  
+	auto outputName = trt.engine->getIOTensorName(1); 
+
+	auto inputShape = trt.engine->getTensorShape(inputName);
+	inputHeight_ 	= inputShape.d[2];
+	inputWidth_  	= inputShape.d[3];
+
+	auto outputShape  = trt.engine->getTensorShape(outputName);
+	trt.numAttributes = outputShape.d[1];  // 6 (for OBB)
+	trt.numDetections = outputShape.d[2];  // 8400
+    trt.numClasses    = trt.numDetections - 5;  // (x, y, w, h, angle)
+
+    CUDA_CHECK(cudaMalloc(&(trt.gpuBuffers[0]), 3*640*640*sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&(trt.gpuBuffers[1]), 6*8400*sizeof(float)));
+	CUDA_CHECK(cudaMalloc(&(trt.deviceNumAnchors), sizeof(int)));
+	CUDA_CHECK(cudaMemset(trt.deviceNumAnchors, 0, sizeof(int)));
+	CUDA_CHECK(cudaMallocHost((void**)&(trt.hostNumAnchors), sizeof(int)));
+	memset(trt.hostNumAnchors, 0, sizeof(int));
+	CUDA_CHECK(cudaMalloc(&(trt.deviceFilteredDetections), 840 * sizeof(Detection)));
+    cuda_preprocess_init(
+		MAX_IMAGE_SIZE,
+		&(trt.pinnedMem),
+		&(trt.deviceMem),
+		&(trt.depthMatHost)
+	);
+    CUDA_CHECK(cudaStreamCreate(&(trt.stream)));
+	trt.context -> setOptimizationProfileAsync(0, trt.stream);
+	trt.context -> setInputTensorAddress(inputName, trt.gpuBuffers[0]);  
+	trt.context -> setOutputTensorAddress(outputName, trt.gpuBuffers[1]);
+}
+
+/* YOLO11::~YOLO11() {
     CUDA_CHECK(cudaStreamSynchronize(stream_));
     CUDA_CHECK(cudaStreamDestroy(stream_));
 
@@ -200,70 +201,73 @@ YOLO11::~YOLO11() {
 	// nvmlShutdown();
     // std::cout<<"YOLO11 destruct complete"<<std::endl;
 	LOG_TRACE("YOLO11 destruct complete");
-}
+} */
 
-std::vector<Detection> YOLO11::modelProcess(const std::pair<cv::Mat, cv::Mat>& pair) {
+std::vector<Detection> YOLO11::modelProcess(
+	TensorRT& trt,
+	const std::pair<cv::Mat, cv::Mat>& pair
+) {
 	cv::Mat colorMat = pair.first;
 	cv::Mat depthMat = pair.second;
 	int img_size = colorMat.cols*colorMat.rows;
 
-	memcpy(*pinnedMemPtr_, colorMat.ptr(), img_size*3);
-	memcpy(*depthMatHostPtr_, depthMat.ptr(), img_size*sizeof(uint16_t));
+	memcpy(trt.pinnedMem, colorMat.ptr(), img_size*3);
+	memcpy(trt.depthMatHost, depthMat.ptr(), img_size*sizeof(uint16_t));
 
 	cuda_preprocess(
 		// dummyImg,
 		colorMat.cols,
 		colorMat.rows,
-		gpuBuffers_[0],
+		trt.gpuBuffers[0],
 		inputWidth_,
 		inputHeight_,
-		stream_,
-		pinnedMemPtr_,
-		deviceMemPtr_,
-		depthMatHostPtr_
+		trt.stream,
+		&trt.pinnedMem,
+		&trt.deviceMem,
+		&trt.depthMatHost
 	);
 
     // context_ -> enqueueV2((void**)gpuBuffers_, stream_, nullptr);
-	context_ -> enqueueV3(stream_);
+	trt.context -> enqueueV3(trt.stream);
 
 	filterDetection(
-        gpuBuffers_[1],
-        numDetections_,
-        numAttributes_,
+        trt.gpuBuffers[1],
+        trt.numDetections,
+        trt.numAttributes,
         confThreshold_,
-        stream_,
-		deviceNumAnchors_,
-		deviceFilteredDetections_
+        trt.stream,
+		trt.deviceNumAnchors,
+		trt.deviceFilteredDetections
     );
 
 	CUDA_CHECK(cudaMemcpy(
-		hostNumAnchors_,
-		deviceNumAnchors_,
+		trt.hostNumAnchors,
+		trt.deviceNumAnchors,
 		sizeof(int),
 		cudaMemcpyDeviceToHost
 	));
-	LOG_INFO("hostNumAnchors: ", *hostNumAnchors_);
+	LOG_INFO("hostNumAnchors: ", *trt.hostNumAnchors);
 
-	if (*hostNumAnchors_ == 0) {
+	if (*trt.hostNumAnchors == 0) {
 		LOG_INFO("No detection results");
 		// nvtxRangePop();
 		return std::vector<Detection> {};
-	} else if (*hostNumAnchors_ < 0) {
+	} else if (*trt.hostNumAnchors < 0) {
 		LOG_ERROR("Error in detection results");
 		throw std::runtime_error("Error: Number of anchors is negative");
 	}
 
-	thresholdResult_.resize(*hostNumAnchors_);
+	trt.results.resize(*trt.hostNumAnchors);
 	CUDA_CHECK(cudaMemcpy(
-		thresholdResult_.data(),
-		deviceFilteredDetections_,
-		*hostNumAnchors_ * sizeof(Detection),
+		trt.results.data(),
+		trt.deviceFilteredDetections,
+		*trt.hostNumAnchors * sizeof(Detection),
 		cudaMemcpyDeviceToHost
 	));	
 
     std::vector<cv::RotatedRect> rboxes;
     std::vector<float> scores;
-    for (const auto& det : thresholdResult_) {
+    for (const auto& det : trt.results) {
         rboxes.push_back(det.rbox);
         scores.push_back(det.conf);
     }
@@ -277,18 +281,18 @@ std::vector<Detection> YOLO11::modelProcess(const std::pair<cv::Mat, cv::Mat>& p
     for(const auto nms : nmsResult) {
         Detection det;
         det.conf    = scores[nms];
-        det.classId = thresholdResult_[nms].classId;
+        det.classId = trt.results[nms].classId;
         det.rbox    = rboxes[nms];
-		det.bottomX = thresholdResult_[nms].bottomX;
-		det.bottomY = thresholdResult_[nms].bottomY;
-		det.camX	= thresholdResult_[nms].camX;
-		det.camY	= thresholdResult_[nms].camY;
-		det.camZ	= thresholdResult_[nms].camZ;
-		det.worldWidth = thresholdResult_[nms].worldWidth;
-		det.worldHeight = thresholdResult_[nms].worldHeight;
-		det.worldBX = thresholdResult_[nms].worldBX;
-		det.worldBY = thresholdResult_[nms].worldBY;
-		det.worldBZ = thresholdResult_[nms].worldBZ;
+		det.bottomX = trt.results[nms].bottomX;
+		det.bottomY = trt.results[nms].bottomY;
+		det.camX	= trt.results[nms].camX;
+		det.camY	= trt.results[nms].camY;
+		det.camZ	= trt.results[nms].camZ;
+		det.worldWidth = trt.results[nms].worldWidth;
+		det.worldHeight = trt.results[nms].worldHeight;
+		det.worldBX = trt.results[nms].worldBX;
+		det.worldBY = trt.results[nms].worldBY;
+		det.worldBZ = trt.results[nms].worldBZ;
         output.push_back(det);
     }
 	// for (const auto& out : output) {

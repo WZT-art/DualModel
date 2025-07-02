@@ -91,16 +91,31 @@ struct TensorRT {
             CUDA_CHECK(cudaStreamDestroy(stream));
             stream = nullptr;
         }
+        if (pinnedMem) {
+            CUDA_CHECK(cudaFreeHost(pinnedMem));
+            pinnedMem = nullptr;
+        }
+        if (deviceMem) {
+            CUDA_CHECK(cudaFree(deviceMem));
+            deviceMem = nullptr;
+        }
+        if (depthMatHost) {
+            CUDA_CHECK(cudaFreeHost(depthMatHost));
+            depthMatHost = nullptr;
+        }
     }
 };
 
 class YOLO11 {
 public:
-    YOLO11(TensorRT& trt);
+    YOLO11(const std::string& cameraParamsFile);
 
     ~YOLO11();
 
-    std::vector<Detection> modelProcess(const std::pair<cv::Mat, cv::Mat>& pair);
+    // void trtDestory(TensorRT& trt);
+    bool initTensorRT(TensorRT& trt);
+
+    std::vector<Detection> modelProcess(TensorRT& trt, const std::pair<cv::Mat, cv::Mat>& pair);
 
     std::pair<int, std::vector<float>> detectProcess(cv::Mat& depthMat, std::vector<Detection> output, bool openVerify);
 
@@ -119,24 +134,24 @@ private:
 	static bool sortRuleWY(const Detection p1, const Detection p2);
 	static bool sortRuleWZ(const std::vector<Detection> p1, const std::vector<Detection> p2);
 
-    uint8_t** pinnedMemPtr_;
-    uint8_t** deviceMemPtr_;
-    uint16_t** depthMatHostPtr_;
-    float* gpuBuffers_[2];
+    // uint8_t** pinnedMemPtr_;
+    // uint8_t** deviceMemPtr_;
+    // uint16_t** depthMatHostPtr_;
+    // float* gpuBuffers_[2];
 
     cudaStream_t stream_;
     std::unique_ptr<nvinfer1::IRuntime, std::function<void(nvinfer1::IRuntime*)>> runtime_;
-    std::unique_ptr<nvinfer1::ICudaEngine, std::function<void(nvinfer1::ICudaEngine*)>> engine_;
-    std::unique_ptr<nvinfer1::IExecutionContext, std::function<void(nvinfer1::IExecutionContext*)>> context_;
+    // std::unique_ptr<nvinfer1::ICudaEngine, std::function<void(nvinfer1::ICudaEngine*)>> engine_;
+    // std::unique_ptr<nvinfer1::IExecutionContext, std::function<void(nvinfer1::IExecutionContext*)>> context_;
 
-    int numAttributes_, numDetections_, numClasses_;
-    float ratioH_, ratioW_;
+    // int numAttributes_, numDetections_, numClasses_;
+    // float ratioH_, ratioW_;
     const int MAX_IMAGE_SIZE = 4096 * 4096;
-    std::vector<Detection> thresholdResult_;
-    int* deviceNumAnchors_;
-    int* hostNumAnchors_;
-    Detection* deviceFilteredDetections_;
+    // std::vector<Detection> thresholdResult_;
+    // int* deviceNumAnchors_;
+    // int* hostNumAnchors_;
+    // Detection* deviceFilteredDetections_;
 
     CameraParams params_;
-    CameraParams* deviceParams_;
+    // CameraParams* deviceParams;
 };
